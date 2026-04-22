@@ -1,6 +1,7 @@
 import numpy as np
-from SetIceShelfBC import SetIceShelfBC
-from mismipbasalforcings import mismipbasalforcings
+# from SetIceShelfBC import SetIceShelfBC
+import pyissm
+from pyissm.model.classes.basalforcings import mismip
 
 # Creating thickness
 print('      creating thickness')
@@ -28,9 +29,15 @@ md.materials.rheology_law = 'None'
 
 # Boundary conditions for diagnostic model
 print('      boundary conditions for diagnostic model')
-md = SetIceShelfBC(md, './Front.exp')
-md.mask.ice_levelset[:]   = -1
-md.mask.ocean_levelset[:] = -1
+# md = SetIceShelfBC(md, './Front.exp')
+# md.mask.ice_levelset[:]   = -1
+# md.mask.ocean_levelset[:] = -1
+
+md.mask.ice_levelset = -1.0 * np.ones(md.mesh.numberofvertices)
+md.mask.ocean_levelset = -1.0 * np.ones(md.mesh.numberofvertices)
+
+md = pyissm.model.bc.set_ice_shelf_bc(md, ice_front_exp="./Front.exp")
+
 pos = np.where((md.mesh.x < 640000.1) & (md.mesh.x > 639999.9))[0]
 md.mask.ice_levelset[pos] = 0
 md.stressbalance.spcvx[:]  = np.nan
@@ -45,7 +52,7 @@ md.stressbalance.spcvy[pos2] = 0
 # Forcing conditions
 print('      forcing conditions')
 # --- basal melt and buttressing conditions -----------------------
-md.basalforcings = mismipbasalforcings()      #  ← remove md
+md.basalforcings = mismip()      #  ← remove md
 
 
 md.basalforcings.meltrate_factor        =   0
