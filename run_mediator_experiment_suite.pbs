@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+#PBS -N issm_mediator_suite
+#PBS -P au88
+#PBS -q normal
+#PBS -l walltime=06:00:00
+#PBS -l ncpus=8
+#PBS -l mem=32GB
+#PBS -l storage=gdata/au88+gdata/vk83+gdata/xp65+scratch/au88
+#PBS -j oe
+
+set -euo pipefail
+
+SCRIPT_DIR="${MISMIP_SUITE_ROOT:-/g/data/au88/jr5971/MISMIP_ISSM}"
+MEDIATOR_ROOT="/g/data/au88/jr5971/issm_simple_mediator"
+
+SUITE="${SUITE:-full}"
+EXPERIMENTS="${EXPERIMENTS:-}"
+EXECUTE="${EXECUTE:-1}"
+MEDIATOR_BUILD_DIR="${MEDIATOR_BUILD_DIR:-build-local-issm}"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-7200}"
+MPI_RANKS="${MPI_RANKS:-${PBS_NCPUS:-8}}"
+OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+REBUILD_LOCAL_ISSM="${REBUILD_LOCAL_ISSM:-0}"
+PYTHON="${PYTHON:-python}"
+PBS_LOG_ROOT="${PBS_LOG_ROOT:-/scratch/au88/jr5971/issm_simple_mediator/pbs}"
+
+mkdir -p "${PBS_LOG_ROOT}"
+
+if ! type module >/dev/null 2>&1; then
+  if [[ -r /opt/Modules/v4.3.0/init/bash ]]; then
+    # shellcheck disable=SC1091
+    source /opt/Modules/v4.3.0/init/bash
+  elif [[ -r /etc/profile.d/modules.sh ]]; then
+    # shellcheck disable=SC1091
+    source /etc/profile.d/modules.sh
+  fi
+fi
+
+echo "Job started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Host: $(hostname)"
+echo "PBS_JOBID: ${PBS_JOBID:-}"
+echo "PBS_O_WORKDIR: ${PBS_O_WORKDIR:-}"
+echo "PBS_NCPUS: ${PBS_NCPUS:-}"
+echo "PBS_NODEFILE: ${PBS_NODEFILE:-}"
+echo "MISMIP_SUITE_ROOT: ${SCRIPT_DIR}"
+echo "SUITE: ${SUITE}"
+echo "EXPERIMENTS: ${EXPERIMENTS:-<all>}"
+echo "EXECUTE: ${EXECUTE}"
+echo "MEDIATOR_BUILD_DIR: ${MEDIATOR_BUILD_DIR}"
+echo "TIMEOUT_SECONDS: ${TIMEOUT_SECONDS}"
+echo "MPI_RANKS: ${MPI_RANKS}"
+echo "OMP_NUM_THREADS: ${OMP_NUM_THREADS}"
+
+if [[ ! -f "${SCRIPT_DIR}/run_mediator_experiment_suite.py" ]]; then
+  echo "ERROR: cannot find run_mediator_experiment_suite.py under MISMIP_SUITE_ROOT=${SCRIPT_DIR}" >&2
+  echo "Set MISMIP_SUITE_ROOT to /g/data/au88/jr5971/MISMIP_ISSM when submitting." >&2
+  exit 2
+fi
+
+if [[ -n "${PBS_JOBID:-}" ]]; then
+  qstat -f "${PBS_JOBID}" > "${PBS_LOG_ROOT}/${PBS_JOBID}.qstat.start" 2>&1 || true
+fi
+
+if type module >/dev/null 2>&1; then
+  module purge
+  module use /g/data/xp65/public/modules || true
+  module load conda/analysis3-26.02
+  module list
+else
+  echo "WARNING: environment modules are unavailable; using current Python environment."
+fi
+
+if [[ "${REBUILD_LOCAL_ISSM}" == "1" || "${REBUILD_LOCAL_ISSM}" == "true" || "${REBUILD_LOCAL_ISSM}" == "yes" ]]; then
+  "${MEDIATOR_ROOT}/build_local_issm.sh"
+fi
+
+cd "${SCRIPT_DIR}"
+
+cmd=(
+  "${PYTHON}"
+  "${SCRIPT_DIR}/run_mediator_experiment_suite.py"
+  --suite "${SUITE}"
+  --timeout-seconds "${TIMEOUT_SECONDS}"
+  --mediator-build-dir "${MEDIATOR_BUILD_DIR}"
+)
+
+case "${EXECUTE}" in
+  1|true|TRUE|yes|YES|on|ON)
+    cmd+=(--execute)
+    ;;
+  0|false|FALSE|no|NO|off|OFF)
+    ;;
+  *)
+    echo "ERROR: EXECUTE must be true/false or 1/0, got '${EXECUTE}'." >&2
+    exit 2
+    ;;
+esac
+
+if [[ -n "${EXPERIMENTS}" ]]; then
+  IFS=':' read -r -a experiment_list <<< "${EXPERIMENTS}"
+  for experiment_id in "${experiment_list[@]}"; do
+    if [[ -n "${experiment_id}" ]]; then
+      cmd+=(--experiment "${experiment_id}")
+    fi
+  done
+fi
+
+printf 'Running command:'
+printf ' %q' "${cmd[@]}"
+printf '\n'
+
+export MPI_RANKS OMP_NUM_THREADS
+
+set +e
+"${cmd[@]}"
+status=$?
+set -e
+
+if [[ -n "${PBS_JOBID:-}" ]]; then
+  qstat -f "${PBS_JOBID}" > "${PBS_LOG_ROOT}/${PBS_JOBID}.qstat.end" 2>&1 || true
+fi
+
+echo "Job finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "Exit status: ${status}"
+exit "${status}"
